@@ -105,6 +105,102 @@ jobs:
         git branch -M "$TARGET_BRANCH"
         git config --global user.name "SavedByLight"
         git config --global user.email "mrfluffyoven@gmail.com"
+        
+        # Guard against dynamic spacing parsing issues by packing the remote URL into a clean bash string
+        REMOTE_URL="https://${{ secrets.GITLAB_TOKEN_NAME }}:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.USERNAME }}/android_dump_${{ env.MANUFACTURER_NAME }}_${{ env.VENDOR_NAME }}.git"
+        git remote add origin "$REMOTE_URL"
+        
+        find . -type f -size +100M -exec git lfs track {} \;
+        if [ -f .gitattributes ]; then
+            git add .gitattributes
+            git commit -s -m "Setup Git LFS"
+            git push -u origin "$TARGET_BRANCH"
+        fi
+        
+        for dir in ${DUMP_DIR_LIST}; do
+            if [ -d "$dir" ]; then
+                git add "$dir"
+                git commit -s -m "dump: ${dir}: import dump for ${{ env.VENDOR_NAME }}
+                Firmware: ${{ github.event.inputs.FIRMWARE_LINK }}"
+                git push -u origin "$TARGET_BRANCH"
+            fi
+        done
+        
+        git add .
+        git commit -s -m "dump: import remaining dump for ${{ env.VENDOR_NAME }}
+        Firmware: ${{ github.event.inputs.FIRMWARE_LINK }}"
+        git push -u origin "$TARGET_BRANCH"
+      run: |
+        cd workspace/dumprx
+        bash dumper.sh ${{ github.event.inputs.FIRMWARE_LINK }}
+        cd out
+        echo "MANUFACTURER_NAME=$(grep "ro.product.vendor.manufacturer" vendor/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+
+    - name: Set Variables - if oplus
+      if: env.MANUFACTURER_NAME == 'oplus'
+      run: |
+        cd workspace/dumprx/out
+        rm -rf .git
+        if [ -d odm ]; then
+           echo "ODM directory exist..."
+        else
+           echo "Making fake ODM directory..."
+           mkdir -p odm && cd odm
+           echo "ro.vendor.oplus.market.name=ossi-${{ github.run_id }}" > build.prop
+           cd ..
+        fi
+        echo "VENDOR_NAME=$(grep "ro.vendor.oplus.market.name" odm/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+        echo "BRANCH=$(grep "ro.vendor.build.id" vendor/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+
+    - name: Set Variables - if others
+      if: env.MANUFACTURER_NAME != 'oplus'
+      run: |
+        cd workspace/dumprx/out
+        rm -rf .git
+        echo "VENDOR_NAME=$(grep "ro.product.vendor.device" vendor/build.prop | awk -F "=" '{split($2, words, " "); print words[1]; exit}')" >> $GITHUB_ENV
+        
+        # Search multiple common build property fields across vendor and system properties
+        BRANCH_ID=$(grep -E "ro.vendor.build.version.id|ro.vendor.build.id|ro.build.id" vendor/build.prop system/build.prop 2>/dev/null | head -n 1 | awk -F "=" '{split($2, words, " "); print words[1]; exit}')
+        
+        # Fallback to 'main' if no matching build ID property is discovered
+        if [ -z "$BRANCH_ID" ]; then
+           BRANCH_ID="main"
+        fi
+        echo "BRANCH=$BRANCH_ID" >> $GITHUB_ENV
+
+    - name: Create GitLab Repository
+      run: |
+        cd workspace
+        curl --header "PRIVATE-TOKEN: ${{ secrets.GITLAB_TOKEN }}" -X POST "https://gitlab.com/api/v4/projects?name=android_dump_${{ env.MANUFACTURER_NAME }}_${{ env.VENDOR_NAME }}&visibility=public" > repo.json
+        
+        GITLAB_USER=$(cat repo.json | grep -o '"username":"[^"]*' | cut -d'"' -f4 | head -n 1)
+        if [ -z "$GITLAB_USER" ]; then
+           echo "ERROR: Failed to extract GitLab username. Using token name fallback..."
+           GITLAB_USER="${{ secrets.GITLAB_TOKEN_NAME }}"
+        fi
+        
+        echo "USERNAME=$GITLAB_USER" >> $GITHUB_ENV
+        cat repo.json
+
+    - name: Push as Repository
+      run: |
+        cd workspace/dumprx/out
+        rm -rf .git .gitignore .gitattributes
+        
+        DUMP_DIR_LIST=$(find -type d -not -empty -printf "%P\n" | grep -v / | grep -v .git)
+        
+        git init
+        git lfs install
+        find . \( -name "*sensetime*" -o -name "*.lic" \) | cut -d'/' -f'2-' >| .gitignore
+        
+        TARGET_BRANCH="${{ env.BRANCH }}"
+        if [ -z "$TARGET_BRANCH" ]; then
+           TARGET_BRANCH="main"
+        fi
+        
+        git branch -M "$TARGET_BRANCH"
+        git config --global user.name "SavedByLight"
+        git config --global user.email "mrfluffyoven@gmail.com"
         git remote add origin https://${{ secrets.GITLAB_TOKEN_NAME }}:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.USERNAME }}/android_dump_${{ env.MANUFACTURER_NAME }}_${{ env.VENDOR_NAME }}.git
         
         find . -type f -size +100M -exec git lfs track {} \;
