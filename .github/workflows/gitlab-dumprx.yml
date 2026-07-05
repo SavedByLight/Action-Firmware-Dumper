@@ -103,8 +103,12 @@ jobs:
         git config --global user.name "SavedByLight"
         git config --global user.email "mrfluffyoven@gmail.com"
         
-        REMOTE_URL="https://${{ secrets.GITLAB_TOKEN_NAME }}:${{ secrets.GITLAB_TOKEN }}@gitlab.com/${{ env.USERNAME }}/android_dump_${{ env.MANUFACTURER_NAME }}_${{ env.VENDOR_NAME }}.git"
-        git remote add origin "$REMOTE_URL"
+        # FIX: Use a clean URL without dynamic string credentials
+        git remote add origin "https://gitlab.com/${{ env.USERNAME }}/android_dump_${{ env.MANUFACTURER_NAME }}_${{ env.VENDOR_NAME }}.git"
+        
+        # FIX: Inject token via standard authorization header format to bypass URL syntax handling
+        TOKEN_BASE64=$(echo -n "${{ secrets.GITLAB_TOKEN_NAME }}:${{ secrets.GITLAB_TOKEN }}" | base64 -w 0)
+        git config http.extraheader "Authorization: Basic ${TOKEN_BASE64}"
         
         find . -type f -size +100M -exec git lfs track {} \;
         if [ -f .gitattributes ]; then
